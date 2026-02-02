@@ -68,8 +68,9 @@ def main():
     model.eval()
     print(f"Model loaded successfully on {device}")
 
-    # ---- Data: use first 37 matched pairs in the given path
-    print("\n2. Loading training data (first 37 matched pairs)...")
+    # ---- Data: use first 40 matched pairs in the given path
+    print("\n2. Loading training data (first 40 matched pairs)...")
+    # ---- Aqui la direccion donde estan guardadas las imagenes que se utilizaran para entrenar
     DATA_DIR = "/home/pablo284/Documents/informs/research/2022.12.21koalas/2025.08.19noseSegmentation/dinov3/data"
     IMAGES_DIR = os.path.join(DATA_DIR, "Image")
     MASKS_DIR  = os.path.join(DATA_DIR, "Mask")
@@ -93,8 +94,8 @@ def main():
     if not common:
         raise RuntimeError(f"No matching basenames found between {IMAGES_DIR} and {MASKS_DIR}")
 
-    # first 37 in ascending order
-    MAX_IMAGES = 37
+    # first 40 in ascending order
+    MAX_IMAGES = 40
     chosen = common[:MAX_IMAGES]
     image_paths = [img_map[b] for b in chosen]
     mask_paths  = [mask_map[b] for b in chosen]
