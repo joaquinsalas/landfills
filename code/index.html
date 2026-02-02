@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Display a map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.maptiler.com/maptiler-sdk-js/v3.10.2/maptiler-sdk.umd.min.js"></script>
+    <link href="https://cdn.maptiler.com/maptiler-sdk-js/v3.10.2/maptiler-sdk.css" rel="stylesheet" />
+    <script src="https://cdn.maptiler.com/leaflet-maptilersdk/v4.1.0/leaflet-maptilersdk.umd.min.js"></script>
+  <style>
+    body { margin: 0; padding: 0; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+    maptilersdk.config.apiKey = 'vGmiSsqHshsF573JvDce';
+
+    const centerTo = [12.550343, 55.665957];
+
+    const franceBounds = [ -118.5, 14.2, -86.3, 33.3 ]; 
+
+    const map = new maptilersdk.Map({
+        container: 'map', 
+        style: "hybrid-v4",
+        center: [2.35, 48.85], 
+        maxBounds: franceBounds 
+    });
+
+    map.on('load', () => {
+        map.fitBounds(ceBounds, { padding: 20, zoom: 14 });
+    });
+
+  </script>
+</body>
+</html>
