@@ -71,7 +71,7 @@ def main():
     # ---- Data: use first 40 matched pairs in the given path
     print("\n2. Loading training data (first 40 matched pairs)...")
     # ---- Aqui la direccion donde estan guardadas las imagenes que se utilizaran para entrenar
-    DATA_DIR = "/home/pablo284/Documents/informs/research/2022.12.21koalas/2025.08.19noseSegmentation/dinov3/data"
+    DATA_DIR = "/home/emilio/Work/landfills/figures/"
     IMAGES_DIR = os.path.join(DATA_DIR, "Image")
     MASKS_DIR  = os.path.join(DATA_DIR, "Mask")
 
