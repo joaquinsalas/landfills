@@ -3,7 +3,8 @@ import torch
 
 def get_transforms(input_size):
 
-    # define las transformaciones que se le haran a las imagenes y mascaras
+    # transforma
+
     train_transform = transforms.Compose([
         transforms.Resize((input_size, input_size)),
         transforms.RandomHorizontalFlip(p=0.5),
@@ -18,7 +19,7 @@ def get_transforms(input_size):
         transforms.ToDtype(torch.float32, scale=True),
     ])
 
-    # normalizacion solo se aplica a la IMAGEN, no a la mascara
+    # normaliza 
     img_normalization = transforms.Normalize(
         mean=[0.485, 0.456, 0.406], 
         std=[0.229, 0.224, 0.225]
