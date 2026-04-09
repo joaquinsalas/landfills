@@ -3,6 +3,8 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms.v2 as transforms
 
+# clase para cargar dataset
+
 class LandfillDataset(Dataset):
     def __init__(self, images_dir, masks_dir, transform=None, img_norm=None):
         self.images_dir = images_dir
