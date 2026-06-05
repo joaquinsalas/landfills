@@ -2,7 +2,6 @@ import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import argparse
-import os
 import time
 from pathlib import Path
 
@@ -15,19 +14,12 @@ from torch.cuda.amp import GradScaler, autocast
 from model   import DinoUNet
 from dataset import build_dataloaders
 
-
-# ---------------------------------------------------------------------------
-# Métricas
-# ---------------------------------------------------------------------------
-
 def dice_score(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> float:
-    """Dice sobre batch. pred = logits, target = 0/1 long."""
     prob = torch.sigmoid(pred).float()
     tgt  = target.float()
     inter = (prob * tgt).sum()
     union = prob.sum() + tgt.sum()
     return ((2 * inter + eps) / (union + eps)).item()
-
 
 def iou_score(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> float:
     prob = (torch.sigmoid(pred) > 0.5).float()
@@ -36,11 +28,6 @@ def iou_score(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> fl
     union = prob.sum() + tgt.sum() - inter
     return ((inter + eps) / (union + eps)).item()
 
-
-# ---------------------------------------------------------------------------
-# Loss combinada: BCE + Dice
-# ---------------------------------------------------------------------------
-
 class BCEDiceLoss(nn.Module):
     def __init__(self, bce_weight: float = 0.5):
         super().__init__()
@@ -48,7 +35,7 @@ class BCEDiceLoss(nn.Module):
         self.bce   = nn.BCEWithLogitsLoss()
 
     def forward(self, pred, target):
-        target_f = target.float().unsqueeze(1)   # (B,1,H,W)
+        target_f = target.float().unsqueeze(1)
         bce_loss  = self.bce(pred, target_f)
 
         prob  = torch.sigmoid(pred)
@@ -58,61 +45,56 @@ class BCEDiceLoss(nn.Module):
 
         return self.bce_w * bce_loss + (1 - self.bce_w) * dice_loss
 
-
-# ---------------------------------------------------------------------------
-# Entrenamiento / validación por época
-# ---------------------------------------------------------------------------
-
-def train_epoch(model, loader, optimizer, criterion, scaler, device):
+def train_epoch(model, loader, optimizer, criterion, scaler, device, accumulation_steps=4):
     model.train()
     total_loss = total_dice = 0.0
-    accumulation_steps = 4 
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
+    
+    use_bf16 = torch.cuda.is_bf16_supported()
 
-    for i, (images, masks) in enumerate(train_loader):
-        images, masks = images.to(device), masks.to(device)
-        
-        with autocast():
-            outputs = model(images)
-            loss = criterion(outputs, masks)
-            loss = loss / accumulation_steps  # Normalizar la pérdida
-            
-        scaler.scale(loss).backward()
-        
-        if (i + 1) % accumulation_steps == 0:
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
-
-    for imgs, masks in loader:
+    for i, (imgs, masks) in enumerate(loader):
         imgs, masks = imgs.to(device), masks.to(device)
-        optimizer.zero_grad(set_to_none=True)
-
-        with autocast():
-            logits = model(imgs)                       # (B,1,H,W)
+        
+        # AMP dinámico dependiendo del hardware (bfloat16 no requiere escalado de gradiente)
+        with autocast(enabled=True, dtype=torch.bfloat16 if use_bf16 else torch.float16):
+            logits = model(imgs)
             loss   = criterion(logits, masks)
+            loss   = loss / accumulation_steps
 
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        scaler.update()
+        if use_bf16:
+            loss.backward()
+        else:
+            scaler.scale(loss).backward()
 
-        total_loss += loss.item()
+        if (i + 1) % accumulation_steps == 0 or (i + 1) == len(loader):
+            if not use_bf16:
+                scaler.unscale_(optimizer)
+            
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            
+            if use_bf16:
+                optimizer.step()
+            else:
+                scaler.step(optimizer)
+                scaler.update()
+                
+            optimizer.zero_grad(set_to_none=True)
+
+        total_loss += loss.item() * accumulation_steps
         total_dice += dice_score(logits.squeeze(1), masks)
 
     n = len(loader)
     return total_loss / n, total_dice / n
 
-
 @torch.no_grad()
 def val_epoch(model, loader, criterion, device):
     model.eval()
     total_loss = total_dice = total_iou = 0.0
+    use_bf16 = torch.cuda.is_bf16_supported()
 
     for imgs, masks in loader:
         imgs, masks = imgs.to(device), masks.to(device)
-        with autocast():
+        with autocast(enabled=True, dtype=torch.bfloat16 if use_bf16 else torch.float16):
             logits = model(imgs)
             loss   = criterion(logits, masks)
 
@@ -123,38 +105,31 @@ def val_epoch(model, loader, criterion, device):
     n = len(loader)
     return total_loss / n, total_dice / n, total_iou / n
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--ckpt",        required=True,  help="Ruta al checkpoint DINOv3")
-    p.add_argument("--images",      required=True,  help="Directorio de imágenes")
-    p.add_argument("--masks",       required=True,  help="Directorio de máscaras")
+    p.add_argument("--ckpt",        required=True)
+    p.add_argument("--images",      required=True)
+    p.add_argument("--masks",       required=True)
     p.add_argument("--output",      default="runs/exp1")
     p.add_argument("--epochs",      type=int,   default=50)
     p.add_argument("--tile_size",   type=int,   default=512)
-    p.add_argument("--batch_size",  type=int,   default=4)
+    p.add_argument("--batch_size",  type=int,   default=2, help="Reduce a 1 o 2 si persiste OOM")
     p.add_argument("--lr",          type=float, default=1e-4)
-    p.add_argument("--lr_enc",      type=float, default=1e-5,  help="LR del encoder en fase 2")
-    p.add_argument("--unfreeze_at", type=int,   default=10,    help="Época en que se descongela encoder")
+    p.add_argument("--lr_enc",      type=float, default=1e-5)
+    p.add_argument("--unfreeze_at", type=int,   default=10)
     p.add_argument("--num_workers", type=int,   default=4)
     p.add_argument("--val_split",   type=float, default=0.15)
-    p.add_argument("--resume",      default=None, help="Checkpoint para reanudar")
+    p.add_argument("--resume",      default=None)
     return p.parse_args()
-
 
 def main():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Dispositivo: {device}")
+    print(f"Dispositivo detectado: {device}")
 
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Datos ────────────────────────────────────────────────────────────
     train_loader, val_loader = build_dataloaders(
         img_dir      = args.images,
         mask_dir     = args.masks,
@@ -164,17 +139,10 @@ def main():
         val_split    = args.val_split,
     )
 
-    # ── Modelo ───────────────────────────────────────────────────────────
-    model = DinoUNet(
-        ckpt_path      = args.ckpt,
-        num_classes    = 1,
-        freeze_encoder = True,   # Fase 1: encoder congelado
-    ).to(device)
+    model = DinoUNet(ckpt_path=args.ckpt, num_classes=1, freeze_encoder=True).to(device)
 
-    # ── Optimizador (solo decoder en fase 1) ─────────────────────────────
-    decoder_params = [p for n, p in model.named_parameters()
-                      if "encoder" not in n and p.requires_grad]
-    optimizer = AdamW(decoder_params, lr=args.lr, weight_decay=1e-4)
+    decoder_params = [p for n, p in model.named_parameters() if "encoder" not in n and p.requires_grad]
+    optimizer = AdamW(decoder_params, lr=args.lr, weight_decay=1e-4, fused=True)
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
     scaler    = GradScaler()
     criterion = BCEDiceLoss(bce_weight=0.5)
@@ -182,7 +150,6 @@ def main():
     start_epoch = 0
     best_dice   = 0.0
 
-    # ── Resume ───────────────────────────────────────────────────────────
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt["model"])
@@ -191,28 +158,32 @@ def main():
         best_dice   = ckpt.get("best_dice", 0.0)
         print(f"Reanudando desde época {start_epoch}")
 
-    # ── Loop de entrenamiento ─────────────────────────────────────────────
+    # Calcular pasos necesarios para simular un batch size efectivo de 8
+    accum_steps = max(1, 8 // args.batch_size)
+
     for epoch in range(start_epoch, args.epochs):
         t0 = time.time()
 
-        # ── Fase 2: descongelar encoder ──────────────────────────────────
         if epoch == args.unfreeze_at:
-            print(f"\n[Época {epoch}] Descongelando encoder — LR encoder = {args.lr_enc}")
-            for p in model.encoder.parameters():
-                p.requires_grad_(True)
+            print(f"\n[Época {epoch}] Descongelando bloques superiores del ViT para ajuste fino...")
+            
+            # Descongelar únicamente bloques profundos (36 a 39) para no desbordar los estados del optimizador
+            for name, param in model.encoder.vit.named_parameters():
+                if any(f"blocks.{j}." in name for j in range(36, 40)) or "norm" in name:
+                    param.requires_grad_(True)
+                else:
+                    param.requires_grad_(False)
 
-            # Nuevo optimizador con dos grupos de LR
+            encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
+            
             optimizer = AdamW([
-                {"params": decoder_params,                          "lr": args.lr},
-                {"params": list(model.encoder.parameters()),        "lr": args.lr_enc},
-            ], weight_decay=1e-4)
+                {"params": decoder_params, "lr": args.lr},
+                {"params": encoder_params,  "lr": args.lr_enc},
+            ], weight_decay=1e-4, fused=True)
+            
             scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs - epoch)
-            scaler    = GradScaler()
 
-        # ── Train ─────────────────────────────────────────────────────────
-        tr_loss, tr_dice = train_epoch(model, train_loader, optimizer, criterion, scaler, device)
-
-        # ── Val ───────────────────────────────────────────────────────────
+        tr_loss, tr_dice = train_epoch(model, train_loader, optimizer, criterion, scaler, device, accumulation_steps=accum_steps)
         vl_loss, vl_dice, vl_iou = val_epoch(model, val_loader, criterion, device)
 
         scheduler.step()
@@ -225,7 +196,6 @@ def main():
             f"{elapsed:.1f}s"
         )
 
-        # ── Checkpoint ───────────────────────────────────────────────────
         state = {
             "epoch":      epoch,
             "model":      model.state_dict(),
@@ -240,8 +210,6 @@ def main():
             print(f"  ★ Nuevo mejor Dice: {best_dice:.4f}")
 
     print(f"\nEntrenamiento finalizado. Mejor Dice: {best_dice:.4f}")
-    print(f"Checkpoint guardado en: {out_dir / 'best.pth'}")
-
 
 if __name__ == "__main__":
     main()
