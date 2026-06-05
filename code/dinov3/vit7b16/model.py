@@ -1,25 +1,6 @@
-"""
-DINOv3 ViT-B/16 → U-Net Decoder
-Segmentación semántica binaria sobre imágenes satelitales/SAR.
-
-Arquitectura:
-  Encoder : DINOv3 ViT-B/16 (patch=16, embed_dim=768)
-             → extrae features de 4 capas intermedias del transformer
-  Neck    : Reshape de tokens a mapas 2D + proyección de canal
-  Decoder : 4 etapas de upsampling (×2 cada una) con skip connections
-  Head    : Conv 1×1 → 1 canal (logit binario)
-
-Para imágenes >1024px se usa tiling en inferencia (ver infer.py).
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 class ConvBnRelu(nn.Sequential):
     def __init__(self, in_ch, out_ch, kernel=3, padding=1):
@@ -42,28 +23,29 @@ class DoubleConv(nn.Module):
         return self.net(x)
 
 
-# ---------------------------------------------------------------------------
-# Proyección de tokens ViT → mapa 2D
-# ---------------------------------------------------------------------------
-
 class TokenToMap(nn.Module):
     def __init__(self, in_dim: int, out_dim: int):
         super().__init__()
         self.proj = nn.Conv2d(in_dim, out_dim, kernel_size=1)
 
     def forward(self, tokens: torch.Tensor, h: int, w: int) -> torch.Tensor:
-        return self.proj(x)
-
-
-# ---------------------------------------------------------------------------
-# Decoder block
-# ---------------------------------------------------------------------------
+        # Si timm devuelve una secuencia plana de tokens (B, L, C)
+        if tokens.dim() == 3:
+            B, L, C = tokens.shape
+            if L == h * w + 1:
+                tokens = tokens[:, 1:, :]  # Remover token CLS si existe
+            elif L != h * w:
+                tokens = tokens[:, :h*w, :]
+            tokens = tokens.reshape(B, h, w, C).permute(0, 3, 1, 2)
+            
+        # Si timm ya devuelve un mapa de características 2D (B, C, H, W)
+        elif tokens.dim() == 4:
+            if tokens.shape[1] != self.proj.in_channels and tokens.shape[3] == self.proj.in_channels:
+                tokens = tokens.permute(0, 3, 1, 2)
+                
+        return self.proj(tokens)
 
 class DecoderBlock(nn.Module):
-    """
-    Upsample ×2, concatena skip, doble conv.
-    Si no hay skip, solo sube y procesa.
-    """
     def __init__(self, in_ch, skip_ch, out_ch):
         super().__init__()
         self.up   = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
@@ -79,17 +61,12 @@ class DecoderBlock(nn.Module):
         return self.conv(x)
 
 
-# ---------------------------------------------------------------------------
-# Encoder wrapper: DINOv3 ViT-B/16
-# ---------------------------------------------------------------------------
-
 class DinoEncoder(nn.Module):
 
     INTERMEDIATE_LAYERS = [9, 19, 29, 39]
 
     def __init__(self, ckpt_path: str, freeze: bool = True):
         super().__init__()
-        # Cambiar el identificador del modelo base por el de DINOv3 7B satelital
         state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
         if isinstance(state, dict):
@@ -105,13 +82,6 @@ class DinoEncoder(nn.Module):
             features_only=True,           
             out_indices=(9, 19, 29, 39), 
         )
-
-        state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        if isinstance(state, dict):
-            for key in ("model", "state_dict", "teacher", "student"):
-                if key in state:
-                    state = state[key]
-                    break
         
         missing, unexpected = self.vit.load_state_dict(state, strict=False)
         print(f"Pesos de DINOv3 ViT-7B cargados exitosamente desde {ckpt_path}")
@@ -121,43 +91,17 @@ class DinoEncoder(nn.Module):
             for p in self.vit.parameters():
                 p.requires_grad_(False)
 
-
     def forward(self, x: torch.Tensor):
         features = self.vit(x)
-        h_p, w_p = features[0].shape[-2:]
+        if features[0].dim() == 4:
+            h_p, w_p = features[0].shape[-2:]
+        else:
+            h_p, w_p = x.shape[-2] // 16, x.shape[-1] // 16
         
         return features, h_p, w_p
 
 
-    @staticmethod
-    def _interpolate_pos_embed(pos_embed, h_p, w_p):
-        """Interpolación bicúbica del positional embedding."""
-        cls_pos  = pos_embed[:, :1, :]
-        patch_pos = pos_embed[:, 1:, :]
-        orig_size = int(patch_pos.shape[1] ** 0.5)
-        patch_pos = patch_pos.reshape(1, orig_size, orig_size, -1).permute(0, 3, 1, 2)
-        patch_pos = F.interpolate(patch_pos, size=(h_p, w_p), mode="bicubic", align_corners=False)
-        patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, h_p * w_p, -1)
-        return torch.cat([cls_pos, patch_pos], dim=1)
-
-
-# ---------------------------------------------------------------------------
-# U-Net completa
-# ---------------------------------------------------------------------------
-
 class DinoUNet(nn.Module):
-    """
-    DINOv3 ViT-B/16 como encoder + decoder U-Net de 4 etapas.
-
-    Canales del decoder (por defecto):
-        f3 (prof 11) → 256
-        f2 (prof  8) → 128
-        f1 (prof  5) →  64
-        f0 (prof  2) →  32
-        + una etapa final ×2 sin skip →  16
-
-    La salida es un logit (sin sigmoid); usa BCEWithLogitsLoss.
-    """
 
     def __init__(
         self,
@@ -169,16 +113,16 @@ class DinoUNet(nn.Module):
         super().__init__()
 
         self.encoder = DinoEncoder(ckpt_path, freeze=freeze_encoder)
-        embed_dim = self.encoder.embed_dim  # 768
+        embed_dim = self.encoder.embed_dim  # 4096
 
         dec_ch = decoder_channels           # (256, 128, 64, 32, 16)
 
-        # Proyecciones token→mapa para cada escala
+        # Proyecciones token→mapa mapeando correctamente a los canales de la U-Net
         self.tok2map = nn.ModuleList([
-            TokenToMap(embed_dim, dec_ch[0]),   # f3 → profundidad máxima
-            TokenToMap(embed_dim, dec_ch[1]),   # f2
-            TokenToMap(embed_dim, dec_ch[2]),   # f1
-            TokenToMap(embed_dim, dec_ch[3]),   # f0
+            TokenToMap(embed_dim, dec_ch[0]),   # f3 → profundidad máxima (256 canales)
+            TokenToMap(embed_dim, dec_ch[1]),   # f2 → (128 canales)
+            TokenToMap(embed_dim, dec_ch[2]),   # f1 → (64 canales)
+            TokenToMap(embed_dim, dec_ch[3]),   # f0 → (32 canales)
         ])
 
         # Decoder (de profundo a superficial)
@@ -196,24 +140,6 @@ class DinoUNet(nn.Module):
         # Cabeza de segmentación
         self.head = nn.Conv2d(dec_ch[4], num_classes, kernel_size=1)
 
-        self.tok2map = nn.ModuleList([
-            nn.Sequential(
-                nn.LayerNorm(4096),
-                nn.Linear(4096, 64)
-            ),
-            nn.Sequential(
-                nn.LayerNorm(4096),
-                nn.Linear(4096, 128)
-            ),
-            nn.Sequential(
-                nn.LayerNorm(4096),
-                nn.Linear(4096, 128)
-            ),
-            nn.Sequential(
-                nn.LayerNorm(4096),
-                nn.Linear(4096, 256)
-            ),
-        ])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
@@ -221,7 +147,6 @@ class DinoUNet(nn.Module):
 
         # ── Encoder ──────────────────────────────────────────────────────
         features, h_p, w_p = self.encoder(x)
-        # features[0..3] = capas [2,5,8,11], cada una (B, h_p*w_p, 768)
 
         # ── Neck: token → mapa 2D ────────────────────────────────────────
         f0 = self.tok2map[3](features[0], h_p, w_p)  # capa 2  (B, 32, h_p, w_p)
@@ -244,9 +169,6 @@ class DinoUNet(nn.Module):
         return out
 
 
-# ---------------------------------------------------------------------------
-# Quick test
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import sys
     ckpt = sys.argv[1] if len(sys.argv) > 1 else "dinov3_vit7b16_pretrain_sat493m-a6675841.pth"
@@ -254,7 +176,6 @@ if __name__ == "__main__":
     model = DinoUNet(ckpt_path=ckpt, num_classes=1, freeze_encoder=True)
     model.eval()
 
-    # Simula un tile SAR 512×512 de 3 canales
     x = torch.randn(1, 3, 512, 512)
     with torch.no_grad():
         out = model(x)
