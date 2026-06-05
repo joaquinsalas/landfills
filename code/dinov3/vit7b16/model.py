@@ -47,21 +47,12 @@ class DoubleConv(nn.Module):
 # ---------------------------------------------------------------------------
 
 class TokenToMap(nn.Module):
-    """
-    Toma los patch tokens (B, N, C) y los reformea a (B, C_out, H/s, W/s).
-    s = patch_size del ViT (16).
-    """
     def __init__(self, in_dim: int, out_dim: int):
         super().__init__()
-        self.proj = nn.Linear(in_dim, out_dim)
+        self.proj = nn.Conv2d(in_dim, out_dim, kernel_size=1)
 
     def forward(self, tokens: torch.Tensor, h: int, w: int) -> torch.Tensor:
-        # tokens: (B, H_p*W_p, C)  donde H_p = H/patch, W_p = W/patch
-        x = self.proj(tokens)               # (B, N, out_dim)
-        B, N, C = x.shape
-        x = x.permute(0, 2, 1)             # (B, C, N)
-        x = x.reshape(B, C, h, w)          # (B, C, H_p, W_p)
-        return x
+        return self.proj(x)
 
 
 # ---------------------------------------------------------------------------
@@ -93,14 +84,6 @@ class DecoderBlock(nn.Module):
 # ---------------------------------------------------------------------------
 
 class DinoEncoder(nn.Module):
-    """
-    Carga el checkpoint y expone los features de 4 bloques del transformer.
-
-    Bloques elegidos para ViT-B (12 bloques en total):
-        índices  2,  5,  8, 11  (cada 3 bloques → 4 escalas)
-
-    Los tokens del CLS se descartan; solo se usan los patch tokens.
-    """
 
     INTERMEDIATE_LAYERS = [9, 19, 29, 39]
 
@@ -115,23 +98,24 @@ class DinoEncoder(nn.Module):
                     state = state[key]
                     break
 
-        try:
-            import timm
-            self.vit = timm.create_model(
-                "vit_7b_patch16_dinov3.sat493m",
-                pretrained=False,
-                num_classes=0,       
-                global_pool="",      
-            )
-        except ImportError:
-            raise ImportError("Instala timm:  pip install timm")
+        import timm
+        self.vit = timm.create_model(
+            "vit_7b_patch16_dinov3.sat493m",
+            pretrained=False,
+            features_only=True,           
+            out_indices=(9, 19, 29, 39), 
+        )
+
+        state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        if isinstance(state, dict):
+            for key in ("model", "state_dict", "teacher", "student"):
+                if key in state:
+                    state = state[key]
+                    break
         
         missing, unexpected = self.vit.load_state_dict(state, strict=False)
         print(f"Pesos de DINOv3 ViT-7B cargados exitosamente desde {ckpt_path}")
-
-        # ── SOLUCIÓN AL ATTRIBUTE ERROR ───────────────────────────────────
-        # Registramos la dimensión del embedding (4096 para ViT-7B)
-        self.embed_dim = getattr(self.vit, "embed_dim", 4096)  
+        self.embed_dim = 4096
 
         if freeze:
             for p in self.vit.parameters():
@@ -139,37 +123,9 @@ class DinoEncoder(nn.Module):
 
 
     def forward(self, x: torch.Tensor):
-        """
-        x : (B, C, H, W)  — debe ser divisible por patch_size=16
-        """
-        B, _, H, W = x.shape
-        patch_size = 16
-        h_p = H // patch_size
-        w_p = W // patch_size
-
-        # Patch embedding
-        tokens = self.vit.patch_embed(x)                
-
-        # Añadir CLS token + pos embedding
-        cls = self.vit.cls_token.expand(B, -1, -1)
-        tokens = torch.cat([cls, tokens], dim=1)
-
-        # Interpolar pos_embed si la resolución cambia
-        pos_embed = self.vit.pos_embed                  
-        if tokens.shape[1] != pos_embed.shape[1]:
-            tokens = tokens + self._interpolate_pos_embed(pos_embed, h_p, w_p)
-        else:
-            tokens = tokens + pos_embed
-
-        tokens = self.vit.pos_drop(tokens)
-
-        features = []
-        for i, block in enumerate(self.vit.blocks):
-            tokens = block(tokens)
-            if i in self.INTERMEDIATE_LAYERS:
-                num_patches = h_p * w_p
-                features.append(tokens[:, -num_patches:, :])
-
+        features = self.vit(x)
+        h_p, w_p = features[0].shape[-2:]
+        
         return features, h_p, w_p
 
 
@@ -278,6 +234,7 @@ class DinoUNet(nn.Module):
         d1 = self.dec1(d0, f1)   # (B,  64, h_p*4, w_p*4)
         d2 = self.dec2(d1, f0)   # (B,  32, h_p*8, w_p*8)
         d3 = self.dec3(d2)       # (B,  16, h_p*16, w_p*16)  → resolución original
+        d4 = self.dec4(d3)       # extra ×2 si quieres super-resolución (opcional)
 
         # Ajuste fino a tamaño original (por si H/W no es múltiplo exacto)
         out = self.head(d3)      # usa d3 si quieres salida en resolución original
