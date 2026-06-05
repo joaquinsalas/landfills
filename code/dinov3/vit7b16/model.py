@@ -278,7 +278,6 @@ class DinoUNet(nn.Module):
         d1 = self.dec1(d0, f1)   # (B,  64, h_p*4, w_p*4)
         d2 = self.dec2(d1, f0)   # (B,  32, h_p*8, w_p*8)
         d3 = self.dec3(d2)       # (B,  16, h_p*16, w_p*16)  → resolución original
-        d4 = self.dec4(d3)       # extra ×2 si quieres super-resolución (opcional)
 
         # Ajuste fino a tamaño original (por si H/W no es múltiplo exacto)
         out = self.head(d3)      # usa d3 si quieres salida en resolución original
