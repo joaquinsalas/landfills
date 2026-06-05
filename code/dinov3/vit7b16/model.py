@@ -102,45 +102,29 @@ class DinoEncoder(nn.Module):
     Los tokens del CLS se descartan; solo se usan los patch tokens.
     """
 
-    INTERMEDIATE_LAYERS = [2, 5, 8, 11]   # ajusta si el modelo tiene diferente profundidad
+    INTERMEDIATE_LAYERS = [9, 19, 29, 39]
 
     def __init__(self, ckpt_path: str, freeze: bool = True):
         super().__init__()
+        # Cambiar el identificador del modelo base por el de DINOv3 7B satelital
+        self.vit = timm.create_model(
+            "vit_7b_patch16_dinov3.sat493m",
+            pretrained=False,
+            num_classes=0,
+            global_pool="",
+        )
+        
+        if ckpt_path:
+            state = torch.load(ckpt_path, map_location="cpu")
+            if "model" in state:
+                state = state["model"]
+            self.vit.load_state_dict(state, strict=False)
+            print(f"Pesos de DINOv3 ViT-7B cargados exitosamente desde {ckpt_path}")
 
-        # ── Cargar pesos ──────────────────────────────────────────────────
-        state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-
-        # El checkpoint puede estar envuelto en distintos keys
-        if isinstance(state, dict):
-            for key in ("model", "state_dict", "teacher", "student"):
-                if key in state:
-                    state = state[key]
-                    break
-
-        # Construir el ViT con timm (igual arquitectura que DINOv2 ViT-B/16)
-        try:
-            import timm
-            self.vit = timm.create_model(
-                "vit_base_patch16_224",
-                pretrained=False,
-                num_classes=0,       # sin cabeza de clasificación
-                global_pool="",      # devuelve todos los tokens
-            )
-        except ImportError:
-            raise ImportError("Instala timm:  pip install timm")
-
-        # Cargar pesos (strict=False para tolerar diferencias menores)
-        missing, unexpected = self.vit.load_state_dict(state, strict=False)
-        if missing:
-            print(f"[DinoEncoder] Pesos faltantes ({len(missing)}): {missing[:5]} ...")
-        if unexpected:
-            print(f"[DinoEncoder] Pesos inesperados ({len(unexpected)}): {unexpected[:5]} ...")
-
-        self.embed_dim = self.vit.embed_dim   # 768 para ViT-B
-
+        self.freeze = freeze
         if freeze:
             for p in self.vit.parameters():
-                p.requires_grad_(False)
+                p.requires_grad = False
 
     def forward(self, x: torch.Tensor):
         """
@@ -243,11 +227,27 @@ class DinoUNet(nn.Module):
         # Cabeza de segmentación
         self.head = nn.Conv2d(dec_ch[4], num_classes, kernel_size=1)
 
+        self.tok2map = nn.ModuleList([
+            nn.Sequential(
+                nn.LayerNorm(4096),
+                nn.Linear(4096, 64)
+            ),
+            nn.Sequential(
+                nn.LayerNorm(4096),
+                nn.Linear(4096, 128)
+            ),
+            nn.Sequential(
+                nn.LayerNorm(4096),
+                nn.Linear(4096, 128)
+            ),
+            nn.Sequential(
+                nn.LayerNorm(4096),
+                nn.Linear(4096, 256)
+            ),
+        ])
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        x   : (B, C, H, W)   H,W deben ser múltiplos de 16
-        out : (B, num_classes, H, W)  — logits sin activación
-        """
+
         B, _, H, W = x.shape
 
         # ── Encoder ──────────────────────────────────────────────────────
