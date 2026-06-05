@@ -107,29 +107,40 @@ class DinoEncoder(nn.Module):
     def __init__(self, ckpt_path: str, freeze: bool = True):
         super().__init__()
         # Cambiar el identificador del modelo base por el de DINOv3 7B satelital
-        self.vit = timm.create_model(
-            "vit_7b_patch16_dinov3.sat493m",
-            pretrained=False,
-            num_classes=0,
-            global_pool="",
-        )
-        
-        if ckpt_path:
-            state = torch.load(ckpt_path, map_location="cpu")
-            if "model" in state:
-                state = state["model"]
-            self.vit.load_state_dict(state, strict=False)
-            print(f"Pesos de DINOv3 ViT-7B cargados exitosamente desde {ckpt_path}")
+        state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
-        self.freeze = freeze
+        if isinstance(state, dict):
+            for key in ("model", "state_dict", "teacher", "student"):
+                if key in state:
+                    state = state[key]
+                    break
+
+        try:
+            import timm
+            self.vit = timm.create_model(
+                "vit_7b_patch16_dinov3.sat493m",
+                pretrained=False,
+                num_classes=0,       
+                global_pool="",      
+            )
+        except ImportError:
+            raise ImportError("Instala timm:  pip install timm")
+        
+        missing, unexpected = self.vit.load_state_dict(state, strict=False)
+        print(f"Pesos de DINOv3 ViT-7B cargados exitosamente desde {ckpt_path}")
+
+        # ── SOLUCIÓN AL ATTRIBUTE ERROR ───────────────────────────────────
+        # Registramos la dimensión del embedding (4096 para ViT-7B)
+        self.embed_dim = getattr(self.vit, "embed_dim", 4096)  
+
         if freeze:
             for p in self.vit.parameters():
-                p.requires_grad = False
+                p.requires_grad_(False)
+
 
     def forward(self, x: torch.Tensor):
         """
         x : (B, C, H, W)  — debe ser divisible por patch_size=16
-        Devuelve lista de 4 tensores de tokens (B, N, 768).
         """
         B, _, H, W = x.shape
         patch_size = 16
@@ -137,17 +148,18 @@ class DinoEncoder(nn.Module):
         w_p = W // patch_size
 
         # Patch embedding
-        tokens = self.vit.patch_embed(x)                # (B, N, 768)
+        tokens = self.vit.patch_embed(x)                
 
         # Añadir CLS token + pos embedding
         cls = self.vit.cls_token.expand(B, -1, -1)
         tokens = torch.cat([cls, tokens], dim=1)
 
-        # Interpolar pos_embed si la resolución difiere del preentrenamiento
-        pos_embed = self.vit.pos_embed                  # (1, 1+196, 768)
+        # Interpolar pos_embed si la resolución cambia
+        pos_embed = self.vit.pos_embed                  
         if tokens.shape[1] != pos_embed.shape[1]:
-            pos_embed = self._interpolate_pos_embed(pos_embed, h_p, w_p)
-        tokens = tokens + pos_embed
+            tokens = tokens + self._interpolate_pos_embed(pos_embed, h_p, w_p)
+        else:
+            tokens = tokens + pos_embed
 
         tokens = self.vit.pos_drop(tokens)
 
@@ -155,10 +167,11 @@ class DinoEncoder(nn.Module):
         for i, block in enumerate(self.vit.blocks):
             tokens = block(tokens)
             if i in self.INTERMEDIATE_LAYERS:
-                # Excluir CLS token → solo patch tokens
-                features.append(tokens[:, 1:, :])
+                num_patches = h_p * w_p
+                features.append(tokens[:, -num_patches:, :])
 
-        return features, h_p, w_p   # lista de 4 × (B, h_p*w_p, 768)
+        return features, h_p, w_p
+
 
     @staticmethod
     def _interpolate_pos_embed(pos_embed, h_p, w_p):
