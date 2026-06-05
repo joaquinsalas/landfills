@@ -85,14 +85,30 @@ class DinoEncoder(nn.Module):
         
         missing, unexpected = self.vit.load_state_dict(state, strict=False)
         print(f"Pesos de DINOv3 ViT-7B cargados exitosamente desde {ckpt_path}")
+        self.vit.load_state_dict(state, strict=False)
+        if hasattr(self.vit, 'set_grad_checkpointing'):
+            self.vit.set_grad_checkpointing(True)
         self.embed_dim = 4096
 
         if freeze:
             for p in self.vit.parameters():
                 p.requires_grad_(False)
+            # ¡ESTO LLENA TU GPU MENOS! Convierte los pesos estáticos a 16-bits
+            if torch.cuda.is_bf16_supported():
+                self.vit.to(torch.bfloat16)
+                self.dtype = torch.bfloat16
+            else:
+                self.vit.to(torch.float16)
+                self.dtype = torch.float16
+        else:
+            self.dtype = torch.float32
 
     def forward(self, x: torch.Tensor):
-        features = self.vit(x)
+        x_enc = x.to(self.dtype)
+        features = self.vit(x_enc)
+        
+        features = [f.float() for f in features]
+
         if features[0].dim() == 4:
             h_p, w_p = features[0].shape[-2:]
         else:

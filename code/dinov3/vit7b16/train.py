@@ -1,17 +1,5 @@
-"""
-Entrenamiento: DINOv3 U-Net para segmentación binaria satelital.
-
-Uso rápido:
-    python train.py \
-        --ckpt   dinov3_vit7b16_pretrain_sat493m-a6675841.pth \
-        --images dataset/images \
-        --masks  dataset/masks \
-        --epochs 50
-
-Estrategia de fine-tuning en dos fases:
-    Fase 1 (primeras N épocas): encoder congelado, solo se entrena el decoder
-    Fase 2 (restantes)       : encoder descongelado con LR muy bajo (×10)
-"""
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import argparse
 import os
@@ -78,6 +66,23 @@ class BCEDiceLoss(nn.Module):
 def train_epoch(model, loader, optimizer, criterion, scaler, device):
     model.train()
     total_loss = total_dice = 0.0
+    accumulation_steps = 4 
+    optimizer.zero_grad()
+
+    for i, (images, masks) in enumerate(train_loader):
+        images, masks = images.to(device), masks.to(device)
+        
+        with autocast():
+            outputs = model(images)
+            loss = criterion(outputs, masks)
+            loss = loss / accumulation_steps  # Normalizar la pérdida
+            
+        scaler.scale(loss).backward()
+        
+        if (i + 1) % accumulation_steps == 0:
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
 
     for imgs, masks in loader:
         imgs, masks = imgs.to(device), masks.to(device)
