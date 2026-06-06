@@ -1,0 +1,16 @@
+{
+  "architectures": [
+    "ViTModel"
+  ],
+  "hidden_size": 4096,
+  "image_size": 224,
+  "initializer_range": 0.02,
+  "intermediate_size": 16384,
+  "layer_norm_eps": 0.000001,
+  "model_type": "vit",
+  "num_attention_heads": 32,
+  "num_hidden_layers": 32,
+  "patch_size": 14,
+  "qkv_bias": true,
+  "transformers_version": "4.41.0"
+}
