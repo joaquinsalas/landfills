@@ -43,7 +43,7 @@ NIX_ENFORCE_NO_NATIVE='1'
 export NIX_ENFORCE_NO_NATIVE
 NIX_HARDENING_ENABLE='bindnow format fortify fortify3 libcxxhardeningfast pic relro stackclashprotection stackprotector strictflexarrays1 strictoverflow zerocallusedregs'
 export NIX_HARDENING_ENABLE
-NIX_LDFLAGS='-rpath /home/emilio/Work/landfills/code/dinov3/vit7b16v2/outputs/out/lib  -L/nix/store/60m4rxhg2fldqaak400c0lry96ijrzqn-python3-3.13.13/lib -L/nix/store/60m4rxhg2fldqaak400c0lry96ijrzqn-python3-3.13.13/lib'
+NIX_LDFLAGS='-rpath /home/emilio/Work/landfills/code/dinov3/vit7b16/outputs/out/lib  -L/nix/store/60m4rxhg2fldqaak400c0lry96ijrzqn-python3-3.13.13/lib -L/nix/store/60m4rxhg2fldqaak400c0lry96ijrzqn-python3-3.13.13/lib'
 export NIX_LDFLAGS
 NIX_NO_SELF_RPATH='1'
 NIX_STORE='/nix/store'
@@ -146,7 +146,7 @@ name='nix-shell-env'
 export name
 nativeBuildInputs=''
 export nativeBuildInputs
-out='/home/emilio/Work/landfills/code/dinov3/vit7b16v2/outputs/out'
+out='/home/emilio/Work/landfills/code/dinov3/vit7b16/outputs/out'
 export out
 outputBin='out'
 outputDev='out'
@@ -177,7 +177,7 @@ preConfigurePhases=' updateAutotoolsGnuConfigScriptsPhase'
 declare -a preFixupHooks=('_moveToShare' '_multioutDocs' '_multioutDevs' )
 preferLocalBuild='1'
 export preferLocalBuild
-prefix='/home/emilio/Work/landfills/code/dinov3/vit7b16v2/outputs/out'
+prefix='/home/emilio/Work/landfills/code/dinov3/vit7b16/outputs/out'
 declare -a propagatedBuildDepFiles=('propagated-build-build-deps' 'propagated-native-build-inputs' 'propagated-build-target-deps' )
 propagatedBuildInputs=''
 export propagatedBuildInputs
