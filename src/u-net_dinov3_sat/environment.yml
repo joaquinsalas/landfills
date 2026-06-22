@@ -1,0 +1,21 @@
+name: landfills-seg
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pytorch
+  - torchvision
+  - pytorch-cuda=12.1
+  - numpy
+  - pillow
+  - pandas
+  - matplotlib
+  - scikit-learn
+  - tqdm
+  - pip
+  - pip:
+      - timm
+      - supervision
+      - opencv-python
