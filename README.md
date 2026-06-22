@@ -35,6 +35,8 @@ dataset/train/landfills/poligono_0.tif
 dataset/train/masks/poligono_0.tif
 ```
 
+El dataset podra ser copiado y pegado en cada directorio del modelo, pero tendra que ser mantenido en ese estado de manera local. Se podra hacer una excepcion en caso de que sea modificado el dataset para el modelo en el que se estara trabajando, pero se tendra que especificar en la documentacion del mismo.
+
 ## Documentación por modelo
 
 Cada carpeta dentro de `src/` debe tener su propio README con:
