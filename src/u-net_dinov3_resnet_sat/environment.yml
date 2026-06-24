@@ -1,0 +1,23 @@
+name: unet-dinov3-resnet
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.12
+  - pip
+
+  # PyTorch con soporte CUDA
+  - pytorch
+  - torchvision      # necesario para ResNet50
+  - pytorch-cuda=12.1
+
+  - pip:
+    - transformers>=4.40.0   # Para DINOv3/DINOv2
+    - huggingface-hub>=0.22  # Para descargar modelos
+    - Pillow>=10.0            # Para abrir imagenes
+    - numpy>=1.26             # Para arrays y embeddings
+    - matplotlib>=3.8         # Para graficas
+    - tqdm                    # Para barras de progreso
