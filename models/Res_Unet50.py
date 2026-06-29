@@ -1,12 +1,12 @@
 import torch
 import torch.nn as nn
-from torchvision.models import resnet34, ResNet34_Weights
+# new
+from torchvision.models import resnet50, ResNet50_Weights 
 import torch.nn.functional as F
 
 class DecoderBlock(nn.Module):
     def __init__(self, in_channels, skip_channels, out_channels):
         super().__init__()
-        # Sube la resolución a la mitad de los canales
         self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
         
         # Recibe la mitad de los canales + los canales del skip connection de ResNet
@@ -28,27 +28,31 @@ class DecoderBlock(nn.Module):
         x = self.relu(self.bn2(self.conv2(x)))
         return x
 
-class ResUNet18(nn.Module):
+# new:
+class ResUNet50(nn.Module): 
     def __init__(self):
         super().__init__()
         # 1. Descargamos el pre-entrenado
-        base_model = resnet34(weights=ResNet34_Weights.DEFAULT)
+        # new
+        base_model = resnet50(weights=ResNet50_Weights.DEFAULT) 
         
-        # 2. ENCODER Extraemos las capas clave de ResNet34
+        # 2. ENCODER Extraemos las capas clave de ResNet50
         self.encoder0 = nn.Sequential(base_model.conv1, base_model.bn1, base_model.relu) # Salida: 64 canales
         self.pool = base_model.maxpool 
-        self.encoder1 = base_model.layer1 # Salida: 64 canales
-        self.encoder2 = base_model.layer2 # Salida: 128 canales
-        self.encoder3 = base_model.layer3 # Salida: 256 canales
-        self.encoder4 = base_model.layer4 # Salida: 512 canales (Fondo de la U)
+        # new
+        self.encoder1 = base_model.layer1 # Salida: 256 canales 
+        self.encoder2 = base_model.layer2 # Salida: 512 canales 
+        self.encoder3 = base_model.layer3 # Salida: 1024 canales 
+        self.encoder4 = base_model.layer4 # Salida: 2048 canales (Fondo de la U)
         
-        # 3. DECODER (Construido a la medida de ResNet)
-        self.dec4 = DecoderBlock(in_channels=512, skip_channels=256, out_channels=256)
-        self.dec3 = DecoderBlock(in_channels=256, skip_channels=128, out_channels=128)
-        self.dec2 = DecoderBlock(in_channels=128, skip_channels=64, out_channels=64)
-        self.dec1 = DecoderBlock(in_channels=64, skip_channels=64, out_channels=64)
+        # 3. DECODER 
+        # new : Modifiqué los in_channels y skip_channels de cada bloque para soportar la profundidad de la ResNet50
+        self.dec4 = DecoderBlock(in_channels=2048, skip_channels=1024, out_channels=512)
+        self.dec3 = DecoderBlock(in_channels=512, skip_channels=512, out_channels=256)
+        self.dec2 = DecoderBlock(in_channels=256, skip_channels=256, out_channels=128)
+        self.dec1 = DecoderBlock(in_channels=128, skip_channels=64, out_channels=64)
         
-        # 4. CAPA FINAL (Sube la última vez para igualar el 256x256 original)
+        # 4. CAPA FINAL 
         self.final_up = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2) 
         self.final_conv = nn.Conv2d(32, 1, kernel_size=1)
         
@@ -60,7 +64,7 @@ class ResUNet18(nn.Module):
         e3 = self.encoder3(e2) 
         e4 = self.encoder4(e3) 
         
-        # Subida (Decoder) conectando los cables (skip connections)
+        # Subida (Decoder) (skip connections)
         d4 = self.dec4(e4, e3) 
         d3 = self.dec3(d4, e2) 
         d2 = self.dec2(d3, e1) 

@@ -1,8 +1,7 @@
 import torch
 
 def calculate_iou(preds, masks, threshold=0.5):
-    # threshold=0.5 significa que si la IA está un 50% segura o más de que hay basura,
-    # lo pintará de blanco. Si está menos segura, lo dejará negro.
+    # threshold=0.5 significa que si la IA está un 50% segura o más de que hay basur
     
     # Convierte las predicciones de la IA en blanco y negro puros (True o False)
     preds = torch.sigmoid(preds) > threshold
