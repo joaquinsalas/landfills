@@ -18,7 +18,7 @@ def generate_metrics_plot(log_path):
     ax1.plot(epochs, df['val_loss'], label='Val Loss', color='red', linestyle='--', linewidth=2)
     ax1.set_title('Pérdida (Loss)')
     ax1.set_xlabel('Época')
-    ax1.set_ylabel('BCE Loss')
+    ax1.set_ylabel('BCE + Dice Loss')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
