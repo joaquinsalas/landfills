@@ -10,7 +10,7 @@ class ProjectionBridge(nn.Module):
         super().__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_ch, out_ch, 1),
-            nn.BatchNorm2d(out_ch),
+            nn.GroupNorm(32, out_ch),
             nn.ReLU(inplace=True),
         )
         self.up_factor = up_factor
@@ -51,7 +51,7 @@ class UNet(nn.Module):
         # Extracción de la conexión "shallow" directo de la imagen para garantizar la máxima resolución
         self.proj_shallow = nn.Sequential(
             nn.Conv2d(n_channels, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
+            nn.GroupNorm(32, 64),
             nn.ReLU(inplace=True)
         )
         
