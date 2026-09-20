@@ -1,7 +1,6 @@
 import os
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
-import torchvision.transforms.v2 as transforms
 
 # clase para cargar dataset
 
